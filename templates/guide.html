@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Deployment Guide — Image Search Service</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;line-height:1.7;padding:40px 24px}
+  .wrapper{max-width:780px;margin:0 auto}
+  a{color:#60a5fa;text-decoration:none}
+  a:hover{text-decoration:underline}
+  h1{font-size:1.7rem;font-weight:700;margin-bottom:6px}
+  .subtitle{color:#94a3b8;font-size:.9rem;margin-bottom:36px}
+  h2{font-size:1rem;font-weight:700;color:#f1f5f9;margin:32px 0 12px;display:flex;align-items:center;gap:8px}
+  h2 .num{background:#1d4ed8;color:#fff;font-size:.72rem;font-weight:700;border-radius:999px;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+  p{color:#94a3b8;font-size:.88rem;margin-bottom:10px}
+  pre{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:16px 20px;overflow-x:auto;margin:10px 0 16px;font-size:.82rem;line-height:1.6}
+  code{font-family:'JetBrains Mono','Fira Code',monospace;color:#7dd3fc}
+  pre code{color:#e2e8f0}
+  table{width:100%;border-collapse:collapse;font-size:.85rem;margin:10px 0 16px}
+  th{text-align:left;padding:8px 12px;background:#1e293b;color:#64748b;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em}
+  td{padding:9px 12px;border-bottom:1px solid #1e293b;color:#cbd5e1}
+  tr:last-child td{border-bottom:none}
+  .section{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:20px 24px;margin-bottom:20px}
+  .back{display:inline-flex;align-items:center;gap:6px;color:#64748b;font-size:.82rem;margin-bottom:28px}
+  .note{background:#172554;border:1px solid #1d4ed8;border-radius:8px;padding:12px 16px;font-size:.82rem;color:#93c5fd;margin:10px 0 16px}
+  .divider{border:none;border-top:1px solid #1e293b;margin:32px 0}
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <a class="back" href="/">&#8592; Back to Dashboard</a>
+
+  <h1>&#128640; Deployment Guide</h1>
+  <p class="subtitle">Complete guide to run Image Search Service in production</p>
+
+  <div class="section">
+    <h2><span class="num">1</span> Server Requirements</h2>
+    <table>
+      <tr><th>Resource</th><th>Minimum</th><th>Recommended</th></tr>
+      <tr><td>RAM</td><td>4 GB</td><td>8 GB</td></tr>
+      <tr><td>CPU</td><td>2 cores</td><td>4 cores</td></tr>
+      <tr><td>Disk</td><td>20 GB</td><td>50 GB</td></tr>
+      <tr><td>OS</td><td colspan="2">Ubuntu 22.04 LTS</td></tr>
+    </table>
+    <p>Works on: DigitalOcean, AWS EC2, Hetzner, Linode, Vultr.</p>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">2</span> Install System Packages</h2>
+    <p>Connect to your server and run:</p>
+    <pre><code>ssh root@your-server-ip
+
+apt update && apt install -y python3 python3-pip python3-venv git docker.io nginx
+systemctl enable docker && systemctl start docker</code></pre>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">3</span> Upload Project to Server</h2>
+    <p><strong>Option A — SCP (direct copy):</strong></p>
+    <pre><code>scp -r /Users/rarashed/Desktop/imageSearch root@your-server-ip:/app/imageSearch</code></pre>
+    <p><strong>Option B — Git:</strong></p>
+    <pre><code># On your local machine
+git init && git add . && git commit -m "init"
+git remote add origin https://github.com/yourname/image-search.git
+git push
+
+# On the server
+git clone https://github.com/yourname/image-search.git /app/imageSearch</code></pre>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">4</span> Start Qdrant Database (Docker)</h2>
+    <pre><code>docker run -d \
+  --name qdrant \
+  --restart always \
+  -p 6333:6333 \
+  -v /app/imageSearch/qdrant_storage:/qdrant/storage \
+  qdrant/qdrant</code></pre>
+    <div class="note">&#128161; The <code>-v</code> flag mounts your existing <code>qdrant_storage/</code> folder — all uploaded vectors are preserved.</div>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">5</span> Setup Python Environment</h2>
+    <pre><code>cd /app/imageSearch
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt</code></pre>
+    <p>Test it works before creating the service:</p>
+    <pre><code>python -m uvicorn main:app --host 0.0.0.0 --port 8000</code></pre>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">6</span> Run as a Service (systemd)</h2>
+    <p>Create the service file:</p>
+    <pre><code>nano /etc/systemd/system/imagesearch.service</code></pre>
+    <p>Paste this content:</p>
+    <pre><code>[Unit]
+Description=Image Search API
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/app/imageSearch
+ExecStart=/app/imageSearch/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+    <p>Enable and start:</p>
+    <pre><code>systemctl daemon-reload
+systemctl enable imagesearch
+systemctl start imagesearch
+systemctl status imagesearch</code></pre>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">7</span> Nginx Reverse Proxy (optional)</h2>
+    <pre><code>nano /etc/nginx/sites-available/imagesearch</code></pre>
+    <pre><code>server {
+    listen 80;
+    server_name your-domain.com;
+
+    client_max_body_size 20M;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}</code></pre>
+    <pre><code>ln -s /etc/nginx/sites-available/imagesearch /etc/nginx/sites-enabled/
+nginx -t && systemctl restart nginx</code></pre>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">8</span> Database Management</h2>
+    <table>
+      <tr><th>Task</th><th>Command</th></tr>
+      <tr><td>Stop Qdrant</td><td><code>docker stop qdrant</code></td></tr>
+      <tr><td>Start Qdrant</td><td><code>docker start qdrant</code></td></tr>
+      <tr><td>Qdrant logs</td><td><code>docker logs qdrant -f</code></td></tr>
+      <tr><td>Backup</td><td><code>cp -r /app/imageSearch/qdrant_storage /backup/qdrant_$(date +%Y%m%d)</code></td></tr>
+      <tr><td>Restore</td><td><code>cp -r /backup/qdrant_20240501 /app/imageSearch/qdrant_storage</code></td></tr>
+      <tr><td>Web dashboard</td><td><code>http://your-server-ip:6333/dashboard</code></td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">9</span> Logs &amp; Monitoring</h2>
+    <pre><code># Live API logs
+journalctl -u imagesearch -f
+
+# Check service status
+systemctl status imagesearch
+
+# Restart after code update
+systemctl restart imagesearch</code></pre>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">&#8635;</span> Server Restart Commands</h2>
+    <p><strong>Production (systemd service):</strong></p>
+    <pre><code># Restart API server
+systemctl restart imagesearch
+
+# Stop API server
+systemctl stop imagesearch
+
+# Start API server
+systemctl start imagesearch
+
+# Restart Qdrant database
+docker restart qdrant
+
+# Restart both API + Qdrant
+systemctl restart imagesearch && docker restart qdrant</code></pre>
+    <p><strong>Local development:</strong></p>
+    <pre><code># Stop running server with Ctrl+C, then:
+source venv/bin/activate
+python -m uvicorn main:app --reload</code></pre>
+    <div class="note">&#128161; After uploading new code to the server, always run <code>systemctl restart imagesearch</code> to apply changes.</div>
+  </div>
+
+  <hr class="divider"/>
+
+  <div class="section">
+    <h2>&#127760; Live URLs</h2>
+    <table>
+      <tr><th>URL</th><th>Description</th></tr>
+      <tr><td><code>http://your-domain.com/</code></td><td>Landing page + system status</td></tr>
+      <tr><td><code>http://your-domain.com/guide</code></td><td>This deployment guide</td></tr>
+      <tr><td><code>http://your-domain.com/docs</code></td><td>Swagger UI — interactive API docs</td></tr>
+      <tr><td><code>http://your-domain.com/redoc</code></td><td>ReDoc API reference</td></tr>
+      <tr><td><code>http://your-domain.com:6333/dashboard</code></td><td>Qdrant database dashboard</td></tr>
+    </table>
+  </div>
+
+  <p style="font-size:.78rem;color:#475569;text-align:center;margin-top:32px">
+    <a href="/">&#8592; Dashboard</a> &nbsp;·&nbsp; <a href="/docs">API Docs</a>
+  </p>
+
+</div>
+</body>
+</html>

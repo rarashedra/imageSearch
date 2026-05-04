@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Image Search Service</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .wrapper{width:100%;max-width:680px}
+  h1{font-size:1.6rem;font-weight:700;margin-bottom:4px}
+  .subtitle{color:#94a3b8;font-size:.9rem;margin-bottom:28px}
+  .badge{display:inline-flex;align-items:center;gap:6px;background:#1e293b;border:1px solid #334155;border-radius:999px;padding:6px 14px;font-size:.8rem;margin-bottom:28px}
+  .dot{width:8px;height:8px;border-radius:50%;background:{{ status_color }}}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:20px 24px;margin-bottom:16px}
+  .card h2{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:14px}
+  .row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #0f172a}
+  .row:last-child{border-bottom:none}
+  .icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0}
+  .ok .icon{background:#052e16;color:#22c55e}
+  .error .icon{background:#2d0a0a;color:#ef4444}
+  .idle .icon{background:#1c1917;color:#f59e0b}
+  .info{flex:1}
+  .info .name{font-size:.9rem;font-weight:600;margin-bottom:2px}
+  .info .detail{font-size:.78rem;color:#94a3b8}
+  .pill{font-size:.7rem;font-weight:600;padding:3px 10px;border-radius:999px}
+  .pill.ok{background:#052e16;color:#22c55e}
+  .pill.error{background:#2d0a0a;color:#ef4444}
+  .pill.idle{background:#1c1917;color:#f59e0b}
+  .error-card{border-color:#ef4444}
+  .error-card h2{color:#ef4444}
+  .error-card ul{padding-left:16px;font-size:.85rem;color:#fca5a5;line-height:1.8}
+  .endpoints .row{flex-wrap:wrap;gap:8px}
+  .method{font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:6px;font-family:monospace}
+  .post{background:#1e3a5f;color:#60a5fa}
+  .patch{background:#2d1b4e;color:#c084fc}
+  .path{font-family:monospace;font-size:.85rem;font-weight:600}
+  .desc{font-size:.78rem;color:#94a3b8;width:100%}
+  a{color:#60a5fa;text-decoration:none}
+  a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <h1>&#128269; Image Search Service</h1>
+  <p class="subtitle">CLIP + Qdrant &nbsp;·&nbsp; vector similarity search</p>
+
+  <div class="badge">
+    <span class="dot"></span>
+    <span>{{ overall }}</span>
+  </div>
+
+  {% if issues %}
+  <div class="card error-card">
+    <h2>&#9888; Issues Detected</h2>
+    <ul>
+      {% for issue in issues %}
+      <li>{{ issue }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2>System Status</h2>
+
+    <div class="row {{ qdrant_status }}">
+      <div class="icon">&#128451;</div>
+      <div class="info">
+        <div class="name">Qdrant Vector DB</div>
+        <div class="detail">{{ qdrant_detail | safe }}</div>
+      </div>
+      <span class="pill {{ qdrant_status }}">{{ qdrant_status | upper }}</span>
+    </div>
+
+    <div class="row {{ clip_status }}">
+      <div class="icon">&#129302;</div>
+      <div class="info">
+        <div class="name">CLIP Model (ViT-B/32)</div>
+        <div class="detail">{{ clip_detail }}</div>
+      </div>
+      <span class="pill {{ clip_status }}">{{ clip_status | upper }}</span>
+    </div>
+  </div>
+
+  <div class="card endpoints">
+    <h2>API Endpoints</h2>
+
+    <div class="row">
+      <span class="method post">POST</span>
+      <span class="path">/upload</span>
+      <span class="desc">Upload a product image with product_id and status (0/1)</span>
+    </div>
+
+    <div class="row">
+      <span class="method post">POST</span>
+      <span class="path">/image/&#123;product_id&#125;</span>
+      <span class="desc">Replace product image (preserves existing status)</span>
+    </div>
+
+    <div class="row">
+      <span class="method patch">PATCH</span>
+      <span class="path">/status/&#123;product_id&#125;</span>
+      <span class="desc">Activate or deactivate a product (status 0 or 1)</span>
+    </div>
+
+    <div class="row">
+      <span class="method post">POST</span>
+      <span class="path">/search</span>
+      <span class="desc">Search top-5 similar active products by image &nbsp;·&nbsp; ?threshold=0.7</span>
+    </div>
+  </div>
+
+  <p style="font-size:.78rem;color:#475569;text-align:center">
+    Interactive docs &rarr; <a href="/docs">/docs</a> &nbsp;·&nbsp; <a href="/redoc">/redoc</a> &nbsp;·&nbsp; <a href="/guide">Deployment Guide</a>
+  </p>
+</div>
+</body>
+</html>
