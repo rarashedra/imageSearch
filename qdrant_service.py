@@ -118,7 +118,7 @@ def update_status(product_id: str, status: int) -> bool:
 def search_similar(
     vector: list[float],
     label: str = "",
-    top_k: int = 5,
+    top_k: int = 20,
     score_threshold: float = 0.75,
     with_vectors: bool = False,
 ) -> list[dict]:

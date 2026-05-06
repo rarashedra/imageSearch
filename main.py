@@ -167,11 +167,11 @@ async def search(
     stored_labels = qdrant_service.get_labels()
     if stored_labels:
         raw = qdrant_service.search_similar(
-            vector, label=predicted_label, score_threshold=threshold, with_vectors=True
+            vector, label=predicted_label, top_k=20, score_threshold=threshold, with_vectors=True
         )
     else:
         raw = qdrant_service.search_similar(
-            vector, score_threshold=threshold, with_vectors=True
+            vector, top_k=20, score_threshold=threshold, with_vectors=True
         )
     results = clip_encoder.verify_results(raw, query_vector=vector, match_threshold=threshold)
     return {
