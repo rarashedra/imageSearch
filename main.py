@@ -10,23 +10,6 @@ import qdrant_service
 
 templates = Jinja2Templates(directory="templates")
 
-# Broad bootstrap labels used only when Qdrant has no labels yet.
-# Once products are uploaded and labels are stored, Qdrant's own labels
-# take over and this list is no longer used.
-_BOOTSTRAP_LABELS = [
-    "shirt", "t-shirt", "dress", "pants", "jeans", "jacket", "coat",
-    "shoes", "sneakers", "boots", "sandals", "bag", "handbag", "backpack",
-    "watch", "sunglasses", "headphones", "phone", "laptop", "tablet",
-    "guitar", "camera", "book", "chair", "sofa", "table",
-    "apple", "mango", "banana", "orange", "fruit", "vegetable",
-]
-
-
-def _get_labels() -> list[str]:
-    """Return stored Qdrant labels, falling back to bootstrap when DB is empty."""
-    stored = qdrant_service.get_labels()
-    return stored if stored else _BOOTSTRAP_LABELS
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -87,28 +70,24 @@ class StatusBody(BaseModel):
         return v
 
 
+
+
 @app.post("/upload", summary="Upload a product image")
 async def upload(
     product_id: str = Form(...),
     status: int = Form(...),
     image: UploadFile = File(...),
-    label: str = Form(None),
 ):
     if status not in (0, 1):
         raise HTTPException(status_code=422, detail="status must be 0 or 1")
     image_bytes = await image.read()
-    if label:
-        vector = clip_encoder.encode_image(image_bytes)
-        detected = label.strip().lower()
-        confidence = 1.0
-    else:
-        vector, detected, confidence = clip_encoder.encode_and_detect(image_bytes, _get_labels())
-    qdrant_service.upsert_image(product_id, vector, status, detected)
+    vector = clip_encoder.encode_image(image_bytes)
+    del image_bytes
+    qdrant_service.upsert_image(product_id, vector, status)
     return {
         "message": "Image uploaded successfully",
         "product_id": product_id,
-        "detected_label": detected or "unknown",
-        "confidence": confidence,
+        "status": status,
     }
 
 
@@ -117,28 +96,21 @@ async def update_image(
     product_id: str,
     image: UploadFile = File(...),
     status: int = Form(None),
-    label: str = Form(None),
 ):
     if status is not None and status not in (0, 1):
         raise HTTPException(status_code=422, detail="status must be 0 or 1")
     image_bytes = await image.read()
-    if label:
-        vector = clip_encoder.encode_image(image_bytes)
-        detected = label.strip().lower()
-        confidence = 1.0
-    else:
-        vector, detected, confidence = clip_encoder.encode_and_detect(image_bytes, _get_labels())
+    vector = clip_encoder.encode_image(image_bytes)
+    del image_bytes
     qdrant_service.update_image(
         product_id,
         vector,
         default_status=status if status is not None else 1,
-        label=detected,
     )
     return {
-        "message": "Image updated successfully",
+        "success": True,
         "product_id": product_id,
-        "detected_label": detected or "unknown",
-        "confidence": confidence,
+        "message": "Image updated successfully",
     }
 
 
@@ -160,22 +132,17 @@ async def update_status(product_id: str, body: StatusBody):
 async def search(
     image: UploadFile = File(...),
     threshold: float = 0.75,
+    top_k: int = 20,
 ):
     image_bytes = await image.read()
-    candidates = _get_labels()
-    vector, predicted_label, accuracy = clip_encoder.encode_and_detect(image_bytes, candidates)
-    stored_labels = qdrant_service.get_labels()
-    if stored_labels:
-        raw = qdrant_service.search_similar(
-            vector, label=predicted_label, top_k=20, score_threshold=threshold, with_vectors=True
-        )
-    else:
-        raw = qdrant_service.search_similar(
-            vector, top_k=20, score_threshold=threshold, with_vectors=True
-        )
-    results = clip_encoder.verify_results(raw, query_vector=vector, match_threshold=threshold)
+    vector = clip_encoder.encode_image(image_bytes)
+    del image_bytes
+
+    raw = qdrant_service.search_similar(vector, top_k=top_k, score_threshold=threshold)
+    results = [{"product_id": r["product_id"], "score": r["score"]} for r in raw]
+
     return {
-        "predicted_label": predicted_label,
-        "accuracy": accuracy,
+        "threshold": threshold,
+        "count": len(results),
         "results": results,
     }
