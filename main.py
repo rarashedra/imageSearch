@@ -14,6 +14,9 @@ templates = Jinja2Templates(directory="templates")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     qdrant_service.ensure_collection()
+    clip_encoder._load_primary()
+    clip_encoder._load_siglip()
+    clip_encoder._load_florence()
     yield
 
 
@@ -36,21 +39,22 @@ async def root(request: Request):
         qdrant_detail = str(e)
         issues.append(f"Qdrant: {e}")
 
-    clip_status = "ok" if clip_encoder._model is not None else "idle"
-    clip_detail = (
-        "model loaded in memory"
-        if clip_encoder._model is not None
-        else "model not yet loaded (loads on first request)"
+    primary_loaded = clip_encoder._primary_model is not None
+    siglip_loaded  = clip_encoder._siglip_model is not None
+    clip_status    = "ok" if primary_loaded else "idle"
+    clip_detail    = (
+        f"primary={'loaded' if primary_loaded else 'idle'}  "
+        f"siglip={'loaded' if siglip_loaded else 'idle'}"
     )
 
     return templates.TemplateResponse(request, "index.html", {
         "status_color": "#22c55e" if not issues else "#ef4444",
-        "overall": "All systems operational" if not issues else f"{len(issues)} issue(s) detected",
-        "issues": issues,
+        "overall":      "All systems operational" if not issues else f"{len(issues)} issue(s) detected",
+        "issues":       issues,
         "qdrant_status": qdrant_status,
         "qdrant_detail": qdrant_detail,
-        "clip_status": clip_status,
-        "clip_detail": clip_detail,
+        "clip_status":   clip_status,
+        "clip_detail":   clip_detail,
     })
 
 
@@ -70,47 +74,100 @@ class StatusBody(BaseModel):
         return v
 
 
-
-
 @app.post("/upload", summary="Upload a product image")
 async def upload(
-    product_id: str = Form(...),
-    status: int = Form(...),
-    image: UploadFile = File(...),
+    product_id:  str  = Form(...),
+    status:      int  = Form(...),
+    image:       UploadFile = File(...),
+    name:        str  = Form(None),
+    description: str  = Form(None),
+    category:    str  = Form(None),
+    tags:        str  = Form(None),
 ):
     if status not in (0, 1):
         raise HTTPException(status_code=422, detail="status must be 0 or 1")
     image_bytes = await image.read()
-    vector = clip_encoder.encode_image(image_bytes)
+
+    # Only call moondream auto-analysis when the caller hasn't provided metadata
+    has_metadata = any([name, description, category, tags])
+    if not has_metadata:
+        analyzed        = clip_encoder.analyze_image(image_bytes)
+        final_category  = analyzed["category"]
+        final_tags      = analyzed["tags"]
+        final_desc      = analyzed["description"]
+    else:
+        final_category  = category    or ""
+        final_tags      = [t.strip() for t in tags.split(",")] if tags else []
+        final_desc      = description or ""
+
+    text = " ".join(filter(None, [name, final_desc, final_category, " ".join(final_tags)])).strip()
+    primary_vec, siglip_vec = clip_encoder.encode_image_both(image_bytes, text=text, tta=False)
     del image_bytes
-    qdrant_service.upsert_image(product_id, vector, status)
+
+    qdrant_service.upsert_image(
+        product_id, primary_vec, siglip_vec, status,
+        name=name or "",
+        category=final_category,
+        tags=final_tags,
+        description=final_desc,
+    )
     return {
-        "message": "Image uploaded successfully",
+        "message":    "Image uploaded successfully",
         "product_id": product_id,
-        "status": status,
+        "status":     status,
+        "name":       name or "",
+        "category":   final_category,
+        "tags":       final_tags,
+        "description": final_desc,
     }
 
 
 @app.patch("/image/{product_id}", summary="Update product image")
 async def update_image(
-    product_id: str,
-    image: UploadFile = File(...),
-    status: int = Form(None),
+    product_id:  str  = ...,
+    image:       UploadFile = File(...),
+    status:      int  = Form(None),
+    name:        str  = Form(None),
+    description: str  = Form(None),
+    category:    str  = Form(None),
+    tags:        str  = Form(None),
 ):
     if status is not None and status not in (0, 1):
         raise HTTPException(status_code=422, detail="status must be 0 or 1")
     image_bytes = await image.read()
-    vector = clip_encoder.encode_image(image_bytes)
+
+    # Only call moondream auto-analysis when the caller hasn't provided metadata
+    has_metadata = any([name, description, category, tags])
+    if not has_metadata:
+        analyzed        = clip_encoder.analyze_image(image_bytes)
+        final_category  = analyzed["category"]
+        final_tags      = analyzed["tags"]
+        final_desc      = analyzed["description"]
+    else:
+        final_category  = category    or ""
+        final_tags      = [t.strip() for t in tags.split(",")] if tags else []
+        final_desc      = description or ""
+
+    text = " ".join(filter(None, [name, final_desc, final_category, " ".join(final_tags)])).strip()
+    primary_vec, siglip_vec = clip_encoder.encode_image_both(image_bytes, text=text, tta=False)
     del image_bytes
+
     qdrant_service.update_image(
-        product_id,
-        vector,
+        product_id, primary_vec, siglip_vec,
         default_status=status if status is not None else 1,
+        name=name or "",
+        category=final_category,
+        tags=final_tags,
+        description=final_desc,
     )
     return {
-        "success": True,
-        "product_id": product_id,
-        "message": "Image updated successfully",
+        "success":     True,
+        "product_id":  product_id,
+        "message":     "Image updated successfully",
+        "name":        name or "",
+        "category":    final_category,
+        "tags":        final_tags,
+        "description": final_desc,
     }
 
 
@@ -130,19 +187,18 @@ async def update_status(product_id: str, body: StatusBody):
 
 @app.post("/search", summary="Search for similar active products")
 async def search(
-    image: UploadFile = File(...),
-    threshold: float = 0.75,
-    top_k: int = 20,
+    image:     UploadFile = File(...),
+    threshold: float = 0.20,
 ):
     image_bytes = await image.read()
-    vector = clip_encoder.encode_image(image_bytes)
+    primary_vec, siglip_vec = clip_encoder.encode_image_both(image_bytes, tta=False)
     del image_bytes
 
-    raw = qdrant_service.search_similar(vector, top_k=top_k, score_threshold=threshold)
-    results = [{"product_id": r["product_id"], "score": r["score"]} for r in raw]
-
+    results = qdrant_service.search_similar(
+        primary_vec, siglip_vec, top_k=20, score_threshold=threshold
+    )
     return {
         "threshold": threshold,
-        "count": len(results),
-        "results": results,
+        "count":     len(results),
+        "results":   results,
     }
